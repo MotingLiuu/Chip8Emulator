@@ -14,7 +14,7 @@
 #define DISPLAY_WIDTH 64
 #define DISPLAY_HEIGHT 32
 
-uint8_t gfx[DISPLAY_HEIGHT][DISPLAY_WIDTH];
+static uint8_t gfx[DISPLAY_HEIGHT][DISPLAY_WIDTH];
 
 void init_console() {
   // \033[2J: 清空整个屏幕
