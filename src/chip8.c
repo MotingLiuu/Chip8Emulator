@@ -5,7 +5,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
-
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include "display.h"
 
 #define FONTSET_STA_ADDRESS 0x50
@@ -43,6 +45,8 @@ uint8_t delay_timer, sound_timer;
 
 uint64_t last_time, cur_time;
 
+struct termios orig_termios;
+
 void p_memo(uint16_t address) {
     printf("First 4 bytes: %02X%02X %02X%02X\n", memory[address], memory[address+1], memory[address+2], memory[address+3]);
 }
@@ -51,6 +55,56 @@ uint64_t get_time_ms() {
     struct  timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
+}
+
+void disableRawMode() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+
+void enableRawMode() {
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disableRawMode);
+
+    struct termios raw = orig_termios;
+
+    raw.c_lflag &= ~(ICANON | ECHO); 
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void setNonBlocking() {
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+}
+
+void pollInput(uint16_t *keypad)
+{
+    char c;
+
+    while (read(STDIN_FILENO, &c, 1) > 0)
+    {
+        switch (c)
+        {
+            case '1': *keypad |= (1 << 0x1); break;
+            case '2': *keypad |= (1 << 0x2); break;
+            case '3': *keypad |= (1 << 0x3); break;
+            case '4': *keypad |= (1 << 0xC); break;
+
+            case 'q': *keypad |= (1 << 0x4); break;
+            case 'w': *keypad |= (1 << 0x5); break;
+            case 'e': *keypad |= (1 << 0x6); break;
+            case 'r': *keypad |= (1 << 0xD); break;
+
+            case 'a': *keypad |= (1 << 0x7); break;
+            case 's': *keypad |= (1 << 0x8); break;
+            case 'd': *keypad |= (1 << 0x9); break;
+            case 'f': *keypad |= (1 << 0xE); break;
+
+            case 'z': *keypad |= (1 << 0xA); break;
+            case 'x': *keypad |= (1 << 0x0); break;
+            case 'c': *keypad |= (1 << 0xB); break;
+            case 'v': *keypad |= (1 << 0xF); break;
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -83,6 +137,9 @@ int main(int argc, char *argv[]) {
     pc = PROGRAM_STA_ADDRESS;
     
     init_display();
+    init_console();
+    enableRawMode();
+    setNonBlocking();
     sp = 0;
     last_time = get_time_ms();
     
@@ -90,10 +147,12 @@ int main(int argc, char *argv[]) {
         cur_time = get_time_ms();
         if (cur_time - last_time >= 16) {
             last_time = cur_time;
-            delay_timer--;
-            sound_timer--;
+            if (delay_timer > 0) delay_timer--;
+            if (sound_timer > 0) sound_timer--;
         }
-        
+        prev_keypad = keypad;
+        keypad = 0;
+        pollInput(&keypad);
         uint16_t opcode = (memory[pc] << 8) | memory[pc + 1];
         pc += 2;
         
@@ -122,6 +181,7 @@ int main(int argc, char *argv[]) {
             case 0x2:
                 stack[sp] = pc;
                 sp++;
+                pc = NNN;
                 break;
             case 0x3:
                 if (V[X] == NN) 
@@ -162,38 +222,30 @@ int main(int argc, char *argv[]) {
                     break;
                 case 4:
                     result = V[X] + V[Y];
-                    if (result > 0xFF)
-                        V[0xF] = 1;
-                    V[X] += V[Y];
+                    V[0xF] = result > 0xFF;
+                    V[X] = result & 0xFF;
                     break;
                 case 5:
-                    result = V[X] - V[Y];
-                    if (result < 0x0) {
-                        V[0xF] = 0;
-                    } else {
-                        V[0xF] = 1;
-                    }
+                    V[0xF] = (V[X] >= V[Y]);
                     V[X] -= V[Y];
                     break;
                 case 7:
-                    result = V[Y] - V[X];
-                    if (result < 0x0) {
-                        V[0xF] = 0;
-                    } else {
-                        V[0xF] = 1;
-                    }
+                    V[0xF] = (V[Y] >= V[X]);
                     V[X] = V[Y] - V[X];
                     break;
                 case 6:
+                    V[0xF] = V[X] & 1;
                     V[X] = V[X] >> 1;
                     break;
                 case 0xE:
+                    V[0xF] = (V[X] >> 7) & 1;
                     V[X] = V[X] << 1;
                     break;
                 default:
                     printf("Unknown instruction %2X\n", opcode);
                     break;
                 }
+                break;
             case 0xA:
                 I = NNN;
                 break;
@@ -263,7 +315,7 @@ int main(int argc, char *argv[]) {
                     }
                     break;
                 case 0x29:
-                    I = V[X];
+                    I = FONTSET_STA_ADDRESS + V[X] * 5;
                     break;
                 case 0x33:
                     memory[I] = V[X] / 100;
@@ -271,12 +323,12 @@ int main(int argc, char *argv[]) {
                     memory[I+2] = V[X] % 10;
                     break;
                 case 0x55:
-                    for (int i=0; i<X; i++) {
+                    for (int i=0; i<=X; i++) {
                         memory[I+i] = V[i];
                     }
                     break;
                 case 0x65:
-                    for (int i=0; i<X; i++) {
+                    for (int i=0; i<=X; i++) {
                         V[i] = memory[I+i];
                     }
                     break;
