@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "display.h"
 
@@ -29,6 +30,9 @@ const uint8_t FONTSET[] = {
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
+uint16_t keypad;
+uint16_t prev_keypad;
+
 uint8_t memory[4096];
 uint8_t V[16];
 uint16_t I;
@@ -43,6 +47,8 @@ void p_memo(uint16_t address) {
 
 
 int main(int argc, char *argv[]) {
+    srand(time(NULL));
+
     memset(memory, 0, sizeof(memory));
     memcpy(&memory[FONTSET_STA_ADDRESS], FONTSET, sizeof(FONTSET));
     char *rom_path;
@@ -70,6 +76,7 @@ int main(int argc, char *argv[]) {
     pc = PROGRAM_STA_ADDRESS;
     
     init_display();
+    sp = 0;
     
     while(true) {
         uint16_t opcode = (memory[pc] << 8) | memory[pc + 1];
@@ -87,10 +94,33 @@ int main(int argc, char *argv[]) {
                 if (opcode == 0x00E0) {
                     init_display();
                     draw_display();
+                } else if (opcode == 0x00EE) {
+                    sp -= 1;
+                    pc = stack[sp];
                 }
                 break;
             case 0x1:
                 pc = NNN;
+                break;
+            case 0x2:
+                stack[sp] = pc;
+                sp++;
+                break;
+            case 0x3:
+                if (V[X] == NN) 
+                    pc += 2;
+                break;
+            case 0x4:
+                if (V[X] != NN)
+                    pc += 2;
+                break;
+            case 0x5:
+                if (V[X] == V[Y])
+                    pc += 2;
+                break;
+            case 0x9:
+                if (V[X] != V[Y])
+                    pc += 2;
                 break;
             case 0x6:
                 V[X] = NN;
@@ -98,8 +128,67 @@ int main(int argc, char *argv[]) {
             case 0x7:
                 V[X] += NN;
                 break;
+            case 0x8:
+                switch (N)
+                {
+                case 0:
+                    V[X] = V[Y];
+                    break;
+                case 1:
+                    V[X] = V[X] | V[Y];
+                    break;
+                case 2:
+                    V[X] = V[X] & V[Y];
+                    break;
+                case 3:
+                    V[X] = V[X] ^ V[Y];
+                    break;
+                case 4:
+                    uint16_t result;
+                    result = V[X] + V[Y];
+                    if (result > 0xFF)
+                        V[0xF] = 1;
+                    V[X] += V[Y];
+                    break;
+                case 5:
+                    uint16_t result;
+                    result = V[X] - V[Y];
+                    if (result < 0x0) {
+                        V[0xF] = 0;
+                    } else {
+                        V[0xF] = 1;
+                    }
+                    V[X] -= V[Y];
+                    break;
+                case 7:
+                    uint16_t result;
+                    result = V[Y] - V[X];
+                    if (result < 0x0) {
+                        V[0xF] = 0;
+                    } else {
+                        V[0xF] = 1;
+                    }
+                    V[X] = V[Y] - V[X];
+                    break;
+                case 6:
+                    V[X] = V[X] >> 1;
+                    break;
+                case 0xE:
+                    V[X] = V[X] << 1;
+                    break;
+                default:
+                    break;
+                }
             case 0xA:
                 I = NNN;
+                break;
+            case 0xB:
+                pc = NNN + V[0x0];
+                break;
+            case 0xC:
+                uint8_t random_num;
+                random_num = rand() % 256;
+                V[X] = random_num & NN;
                 break;
             case 0xD: {
                 uint8_t x_coor = V[X] & 0x3F;
@@ -126,6 +215,60 @@ int main(int argc, char *argv[]) {
                 draw_display();
                 break;
             }
+            case 0xE:
+                if (NN = 0x9E) {
+                    if (keypad & (1 << V[X]))
+                        pc += 2;
+                } else if (NN = 0xA1) {
+                    if (!(keypad & (1 << V[X])))
+                        pc += 2;
+                }
+                break;
+            case 0xF:
+                switch (NN)
+                {
+                case 0x07:
+                    V[X] = delay_timer;
+                    break;
+                case 0x15:
+                    delay_timer = V[X];
+                    break;
+                case 0x18:
+                    sound_timer = V[X];
+                    break;
+                case 0x1E:
+                    I += V[X];
+                    break;
+                case 0x0A:
+                    uint16_t new_keys = keypad & ~prev_keypad;
+                    if (!new_keys) {
+                        pc -= 2;
+                    } else {
+                        V[X] = __builtin_ctz(new_keys);
+                    }
+                    break;
+                case 0x29:
+                    I = V[X];
+                    break;
+                case 0x33:
+                    memory[I] = V[X] / 100;
+                    memory[I+1] = (V[X] / 10) % 10;
+                    memory[I+2] = V[X] % 10;
+                    break;
+                case 0x55:
+                    for (int i=0; i<X; i++) {
+                        memory[I+i] = V[i];
+                    }
+                    break;
+                case 0x65:
+                    for (int i=0; i<X; i++) {
+                        V[i] = memory[I+i];
+                    }
+                    break;
+                default:
+                    break;
+                }
+                break;
         }
         sleep_ms(2000);
     }
