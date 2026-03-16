@@ -41,10 +41,17 @@ uint16_t stack[16];
 uint8_t sp;
 uint8_t delay_timer, sound_timer;
 
+uint64_t last_time, cur_time;
+
 void p_memo(uint16_t address) {
     printf("First 4 bytes: %02X%02X %02X%02X\n", memory[address], memory[address+1], memory[address+2], memory[address+3]);
 }
 
+uint64_t get_time_ms() {
+    struct  timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
+}
 
 int main(int argc, char *argv[]) {
     srand(time(NULL));
@@ -77,8 +84,16 @@ int main(int argc, char *argv[]) {
     
     init_display();
     sp = 0;
+    last_time = get_time_ms();
     
     while(true) {
+        cur_time = get_time_ms();
+        if (cur_time - last_time >= 16) {
+            last_time = cur_time;
+            delay_timer--;
+            sound_timer--;
+        }
+        
         uint16_t opcode = (memory[pc] << 8) | memory[pc + 1];
         pc += 2;
         
@@ -88,6 +103,8 @@ int main(int argc, char *argv[]) {
         uint8_t N = (opcode & 0x000F);
         uint8_t NN = (opcode & 0x00FF);
         uint16_t NNN = (opcode & 0x0FFF);
+        
+        uint16_t result;
         
         switch (type) {
             case 0x0:
@@ -144,14 +161,12 @@ int main(int argc, char *argv[]) {
                     V[X] = V[X] ^ V[Y];
                     break;
                 case 4:
-                    uint16_t result;
                     result = V[X] + V[Y];
                     if (result > 0xFF)
                         V[0xF] = 1;
                     V[X] += V[Y];
                     break;
                 case 5:
-                    uint16_t result;
                     result = V[X] - V[Y];
                     if (result < 0x0) {
                         V[0xF] = 0;
@@ -161,7 +176,6 @@ int main(int argc, char *argv[]) {
                     V[X] -= V[Y];
                     break;
                 case 7:
-                    uint16_t result;
                     result = V[Y] - V[X];
                     if (result < 0x0) {
                         V[0xF] = 0;
@@ -177,6 +191,7 @@ int main(int argc, char *argv[]) {
                     V[X] = V[X] << 1;
                     break;
                 default:
+                    printf("Unknown instruction %2X\n", opcode);
                     break;
                 }
             case 0xA:
@@ -216,10 +231,10 @@ int main(int argc, char *argv[]) {
                 break;
             }
             case 0xE:
-                if (NN = 0x9E) {
+                if (NN == 0x9E) {
                     if (keypad & (1 << V[X]))
                         pc += 2;
-                } else if (NN = 0xA1) {
+                } else if (NN == 0xA1) {
                     if (!(keypad & (1 << V[X])))
                         pc += 2;
                 }
@@ -266,10 +281,15 @@ int main(int argc, char *argv[]) {
                     }
                     break;
                 default:
+                    printf("Unknown instruction %2X\n", opcode);
                     break;
                 }
+                break;
+            default:
+                printf("Unknown instruction %02X\n", opcode);
                 break;
         }
         sleep_ms(2000);
     }
+    restore_console();
 }
